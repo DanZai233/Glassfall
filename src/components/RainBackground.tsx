@@ -1,0 +1,268 @@
+import React, { useEffect, useRef } from 'react';
+import { Theme } from '../utils/themes';
+
+const vertexShaderSource = `
+  attribute vec2 position;
+  void main() {
+    gl_Position = vec4(position, 0.0, 1.0);
+  }
+`;
+
+const fragmentShaderSource = `
+  precision highp float;
+  uniform vec2 u_resolution;
+  uniform float u_time;
+  uniform vec3 u_light1;
+  uniform vec3 u_light2;
+  uniform vec3 u_light3;
+  uniform vec3 u_baseColor;
+
+  vec3 N13(float p) {
+      vec3 p3 = fract(vec3(p) * vec3(.1031,.11369,.13787));
+      p3 += dot(p3, p3.yzx + 19.19);
+      return fract(vec3((p3.x + p3.y)*p3.z, (p3.x+p3.z)*p3.y, (p3.y+p3.z)*p3.x));
+  }
+
+  float N(float t) {
+      return fract(sin(t*12345.564)*7658.76);
+  }
+
+  float Saw(float b, float t) {
+      return smoothstep(0., b, t)*smoothstep(1., b, t);
+  }
+
+  vec2 DropLayer2(vec2 uv, float t) {
+      vec2 UV = uv;
+      
+      uv.y += t*0.75;
+      vec2 a = vec2(6., 1.);
+      vec2 grid = a*2.;
+      vec2 id = floor(uv*grid);
+      
+      float colShift = N(id.x); 
+      uv.y += colShift;
+      
+      id = floor(uv*grid);
+      vec3 n = N13(id.x*35.2+id.y*237.6);
+      vec2 st = fract(uv*grid)-vec2(.5, 0);
+      
+      float x = n.x-.5;
+      
+      float y = UV.y*20.;
+      float wiggle = sin(y+sin(y));
+      x += wiggle*(.5-abs(x))*(n.z-.5);
+      x *= .7;
+      float ti = fract(t+n.z);
+      y = (Saw(.85, ti)-.5)*.9+.5;
+      vec2 p = vec2(x, y);
+      
+      float d = length((st-p)*a.yx);
+      
+      float mainDrop = smoothstep(.4, .0, d);
+      
+      float r = sqrt(smoothstep(1., y, st.y));
+      float cd = abs(st.x-x);
+      float trail = smoothstep(.23*r, .15*r*r, cd);
+      float trailFront = smoothstep(-.02, .02, st.y-y);
+      trail *= trailFront*r*r;
+      
+      y = UV.y;
+      float trail2 = smoothstep(.2*r, .0, cd);
+      float droplets = max(0., (sin(y*(1.-y)*120.)-st.y))*trail2*trailFront*n.z;
+      y = fract(y*10.)+(st.y-.5);
+      float dd = length(st-vec2(x, y));
+      droplets = smoothstep(.3, .0, dd);
+      float m = mainDrop+droplets*r*trailFront;
+      
+      return vec2(m, trail);
+  }
+
+  float StaticDrops(vec2 uv, float t) {
+      uv *= 40.;
+      
+      vec2 id = floor(uv);
+      uv = fract(uv)-.5;
+      vec3 n = N13(id.x*107.45+id.y*3543.654);
+      vec2 p = (n.xy-.5)*.7;
+      float d = length(uv-p);
+      
+      float fade = Saw(.025, fract(t+n.z));
+      float c = smoothstep(.3, .0, d)*fract(n.z*10.)*fade;
+      return c;
+  }
+
+  vec2 Drops(vec2 uv, float t, float l0, float l1, float l2) {
+      float s = StaticDrops(uv, t)*l0; 
+      vec2 m1 = DropLayer2(uv, t)*l1;
+      vec2 m2 = DropLayer2(uv*1.85, t)*l2;
+      
+      float c = s+m1.x+m2.x;
+      c = smoothstep(.3, 1., c);
+      
+      return vec2(c, max(m1.y*l0, m2.y*l1));
+  }
+
+  void main() {
+      vec2 uv = (gl_FragCoord.xy-.5*u_resolution.xy) / u_resolution.y;
+      vec2 UV = gl_FragCoord.xy/u_resolution.xy;
+      float T = u_time * 0.5;
+      
+      float t = T*.2;
+      
+      float rainAmount = 0.8;
+      
+      float zoom = -cos(T*.2);
+      uv *= .7+zoom*.3;
+      
+      UV = (UV-.5)*(.9+zoom*.1)+.5;
+      
+      float staticDrops = smoothstep(-.5, 1., rainAmount)*2.;
+      float layer1 = smoothstep(.25, .75, rainAmount);
+      float layer2 = smoothstep(.0, .5, rainAmount);
+      
+      vec2 c = Drops(uv, t, staticDrops, layer1, layer2);
+      vec2 e = vec2(.001, 0.);
+      float cx = Drops(uv+e, t, staticDrops, layer1, layer2).x;
+      float cy = Drops(uv+e.yx, t, staticDrops, layer1, layer2).x;
+      vec2 n = vec2(cx-c.x, cy-c.x);
+      
+      // Background
+      vec2 bgUv = UV + n * 0.5; // Distort background
+      
+      vec3 col = vec3(0.0);
+      
+      // Neon lights
+      float light1 = smoothstep(0.2, 0.0, length(bgUv - vec2(0.2, 0.8)));
+      float light2 = smoothstep(0.3, 0.0, length(bgUv - vec2(0.8, 0.3)));
+      float light3 = smoothstep(0.4, 0.0, length(bgUv - vec2(0.5, 0.5)));
+      
+      col += light1 * u_light1 * 2.0;
+      col += light2 * u_light2 * 1.5;
+      col += light3 * u_light3 * 1.0;
+      
+      // Base dark color
+      col += u_baseColor;
+      
+      // Add some horizontal streaks for motion/city feel
+      col += smoothstep(0.95, 1.0, sin(bgUv.y * 50.0)) * vec3(0.1, 0.2, 0.3) * 0.5;
+      
+      // Mix in the drops
+      col = mix(col, vec3(1.0), c.x * 0.5); // Highlight drops
+      
+      gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+export const RainBackground: React.FC<{ theme: Theme }> = ({ theme }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const themeRef = useRef(theme);
+
+  useEffect(() => {
+    themeRef.current = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const gl = canvas.getContext('webgl');
+    if (!gl) return;
+
+    const compileShader = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+
+    const vertexShader = compileShader(gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    if (!vertexShader || !fragmentShader) return;
+
+    const program = gl.createProgram();
+    if (!program) return;
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(program));
+      return;
+    }
+
+    gl.useProgram(program);
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    const positions = [
+      -1.0, -1.0,
+       1.0, -1.0,
+      -1.0,  1.0,
+      -1.0,  1.0,
+       1.0, -1.0,
+       1.0,  1.0,
+    ];
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+    const positionLocation = gl.getAttribLocation(program, 'position');
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
+    const timeLocation = gl.getUniformLocation(program, 'u_time');
+    const l1Loc = gl.getUniformLocation(program, 'u_light1');
+    const l2Loc = gl.getUniformLocation(program, 'u_light2');
+    const l3Loc = gl.getUniformLocation(program, 'u_light3');
+    const baseLoc = gl.getUniformLocation(program, 'u_baseColor');
+
+    let animationFrameId: number;
+    const startTime = performance.now();
+
+    const render = (time: number) => {
+      // Resize canvas to match display size
+      const displayWidth = canvas.clientWidth;
+      const displayHeight = canvas.clientHeight;
+      if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+        canvas.width = displayWidth;
+        canvas.height = displayHeight;
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+      }
+
+      gl.uniform2f(resolutionLocation, gl.canvas.width, gl.canvas.height);
+      gl.uniform1f(timeLocation, (time - startTime) / 1000.0);
+      
+      gl.uniform3fv(l1Loc, themeRef.current.bgLights.light1);
+      gl.uniform3fv(l2Loc, themeRef.current.bgLights.light2);
+      gl.uniform3fv(l3Loc, themeRef.current.bgLights.light3);
+      gl.uniform3fv(baseLoc, themeRef.current.bgLights.base);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      animationFrameId = requestAnimationFrame(render);
+    };
+
+    render(startTime);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      gl.deleteProgram(program);
+      gl.deleteShader(vertexShader);
+      gl.deleteShader(fragmentShader);
+      gl.deleteBuffer(positionBuffer);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 w-full h-full -z-10"
+      style={{ display: 'block' }}
+    />
+  );
+};

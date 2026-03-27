@@ -1,0 +1,5 @@
+{
+  "name": "Glassfall",
+  "description": "A beautiful Tetris game with glassmorphism UI and an advanced WebGL rain background.",
+  "requestFramePermissions": []
+}
